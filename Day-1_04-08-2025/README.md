@@ -18,7 +18,7 @@ When you type `http://example.com` in your browser:
 
 ---
 
-## Basic Concepts You Must Know
+## Basic Concepts
 
 | Term         | Meaning                                                                                               |
 | ------------ | ----------------------------------------------------------------------------------------------------- |
