@@ -9,3 +9,7 @@
 1. Your Browser (the client) Sends as HTTP request to exapmle.com.
 2. The server replies with an HTTP response (like an HTML page).
 3. your browser shows you the content.
+
+## Basic concepts:
+### Term                Meaning
+### Client              The User/browser/app that makes the request.
