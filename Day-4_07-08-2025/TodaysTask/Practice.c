@@ -4,6 +4,7 @@
 #include<string.h> // memset()
 #include<netinet/in.h> // sockaddr_in, server_addr
 #include<unistd.h> // close()
+#include<arpa/inet.h> // inet_ntop() for converting IP to readable form
 
 int main()
 {
@@ -75,8 +76,42 @@ int main()
     }
 
     // Convert client IP address to human-readable string
+    inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+    printf("Client connected from %s:%d\n", client_ip, ntohs(client_addr.sin_port));
 
+    // Send welcome message to client
+    const char *welcome_msg = "Welcome to the TCP Echo server!\n";
+    if(write(client_fd, welcome_msg, strlen(welcome_msg)) < 0)
+    {
+        perror("Write to Client Failed!");
+        close(client_fd);
+        close(server_fd);
+        exit(1);
+    }
+    else
+    {
+        printf("Welcome message sent to client.\n");
+    }
 
+    // 6. Start reciving messages from client
+    // Loop continues until client disconnects or error occurs
+    char buffer[1024]; // Buffer to hold received messages
+    while(1)
+    {
+        memset(buffer, 0, sizeof(buffer)); // Clear the buffer before receiving new data
+        int bytes_received = recv(client_fd, buffer, sizeof(buffer), 0); // Receive data
+        if(bytes_received <= 0) // If client disconnects or error occurs
+        {
+            printf("Client disconnected or error occurred.\n");
+            break;
+        }
+        if(strncmp(buffer, "exit", 4) == 0 || strncmp(buffer, "bye", 3) == 0)
+        {
+            printf("Client requested to close the connection.\n");
+            break;
+        }
+        printf("Client says: %s\n", buffer); // Print received message
+    }
 
     // Cleanup
     close(server_fd); // Close the socket
