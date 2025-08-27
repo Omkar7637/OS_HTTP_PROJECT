@@ -1,0 +1,17 @@
+Task 1: Log the entire raw HTTP request
+Task 2: Modify HTML dynamically with current date/time and client IP
+Task 3: Send different responses for /hello, /bye, and default pages
+
+Task 1 — Log Full Request
+Reads entire incoming HTTP request into buffer and prints it to terminal.
+
+Task 2 — Dynamic Content
+Uses time() + strftime() to insert the current date/time.
+
+Displays client IP from inet_ntop().
+Task 3 — Path-Based Responses
+Checks URL path using sscanf() on the request line.
+/hello → “Hello Page”
+/bye → “Goodbye Page”
+Any other → “Default Page”
+
