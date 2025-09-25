@@ -1,303 +1,224 @@
-#define _GNU_SOURCE  // Enables GNU-specific functions like strcasestr()
-#include <stdio.h>   // printf, perror, snprintf, sscanf
-#include <stdlib.h>  // exit, malloc, free
-#include <string.h>  // strstr, strlen, memcpy, etc.
-#include <strings.h> // strncasecmp (case-insensitive compare)
-#include <unistd.h>  // close(), read(), write()
-#include <arpa/inet.h> // sockaddr_in, inet_ntoa, htons, etc. (networking)
-#include <time.h>    // time(), ctime()
-#include <pthread.h> // pthread_create, pthread_detach (for multithreading)
+#include <stdio.h>      // Standard I/O functions
+#include <stdlib.h>     // Standard library (exit, malloc, etc.)
+#include <string.h>     // String functions (strcpy, strstr, strlen, etc.)
+#include <unistd.h>     // For close(), read(), write(), etc.
+#include <arpa/inet.h>  // For socket functions and structures
+#include <time.h>       // For getting current time
 
-#define PORT 8080         // The TCP port number where the server listens
-#define BUF_SIZE 4096     // Maximum buffer size for receiving headers+data
-#define POST_MAX 4096     // Maximum size of POST body we accept/echo back
+#define PORT 8080       // Port number where server will listen
+#define BUF_SIZE 4096   // Maximum buffer size for request/response
 
-// =============================================================
-// recv_all_headers()
-// Reads from the client socket until HTTP headers are fully received
-// (headers end with "\r\n\r\n"). It prints the raw request and how
-// many times recv() was called.
-// Returns: total number of bytes read into buf.
-// =============================================================
+/*
+ * recv_all_headers:
+ * Reads HTTP headers from the client socket until it reaches
+ * the end of headers ("\r\n\r\n").
+ * Keeps track of how many times recv() was called.
+ * Prints the raw HTTP request headers.
+ */
 int recv_all_headers(int client_fd, char *buf, size_t size) {
-    int total = 0;      // total bytes read so far
-    int n;              // number of bytes read in each recv()
-    int recv_count = 0; // how many times recv() was called
+    int total = 0, n, recv_count = 0;
 
-    while ((n = recv(client_fd, buf + total, (int)(size - total - 1), 0)) > 0) {
+    // Keep reading from socket until end of headers is found
+    while ((n = recv(client_fd, buf + total, size - total - 1, 0)) > 0) {
         recv_count++;
         total += n;
-        buf[total] = '\0'; // Null terminate to treat buffer as a string
-
-        // Break if "\r\n\r\n" (end of headers) is found
-        if (strstr(buf, "\r\n\r\n")) break;
-
-        // Prevent buffer overflow (if request too big)
-        if ((size_t)total >= size - 1) break;
+        buf[total] = '\0';  // Null terminate buffer
+        if (strstr(buf, "\r\n\r\n")) break; // End of headers found
     }
 
+    // Debug info
     printf("recv() was called %d times to read headers.\n", recv_count);
     printf("===== RAW HTTP REQUEST =====\n%s\n============================\n", buf);
+
     return total;
 }
 
-// =============================================================
-// send_all()
-// Safe wrapper for send() — ensures entire buffer is sent.
-// send() may send fewer bytes than requested; this loop retries.
-// =============================================================
-static void send_all(int fd, const char *data, size_t len) {
-    size_t sent = 0;
-    while (sent < len) {
-        ssize_t n = send(fd, data + sent, len - sent, 0);
-        if (n <= 0) break; // stop if error or connection closed
-        sent += (size_t)n;
-    }
-}
+/*
+ * handle_client:
+ * Handles a single client connection.
+ * - Reads headers
+ * - Parses request line (method, path, version)
+ * - Handles GET and POST requests
+ * - Sends proper HTTP response
+ */
+void handle_client(int client_fd) {
+    char buf[BUF_SIZE];
 
-// =============================================================
-// handle_client()
-// Handles an HTTP client connection (GET or POST).
-// =============================================================
-static void handle_client(int client_fd) {
-    char reqbuf[BUF_SIZE];   // buffer for request (headers + maybe body)
-    memset(reqbuf, 0, sizeof(reqbuf));
+    // Step 1: Receive all HTTP headers
+    recv_all_headers(client_fd, buf, sizeof(buf));
 
-    // 1. Read all headers (and possibly some body if already sent)
-    recv_all_headers(client_fd, reqbuf, sizeof(reqbuf));
-
-    // 2. Parse request line: "METHOD PATH VERSION"
-    char method[16] = {0}, path[256] = {0}, version[16] = {0};
-    if (sscanf(reqbuf, "%15s %255s %15s", method, path, version) != 3) {
-        // Malformed request → respond with 400 Bad Request
-        const char *bad = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
-        send_all(client_fd, bad, strlen(bad));
+    // --- Parse request line (first line: METHOD PATH VERSION) ---
+    char method[16], path[256], version[16];
+    if (sscanf(buf, "%s %s %s", method, path, version) != 3) {
+        close(client_fd);  // Invalid request
         return;
     }
 
-    // 3. Extract query string if present (?key=value&...)
+    // --- Detect Content-Length for POST request ---
+    int content_length = 0;
+    char *cl_ptr = strcasestr(buf, "Content-Length:");
+    if (cl_ptr) {
+        sscanf(cl_ptr, "Content-Length: %d", &content_length);
+    }
+
+    // --- Handle query parameters if present ---
     char *query = NULL;
-    if (strchr(path, '?')) {
-        char *qmark = strchr(path, '?');
-        *qmark = '\0';   // terminate path at '?'
-        query = qmark + 1; // query string starts after '?'
+    char *qmark = strchr(path, '?');  // Find '?'
+    if (qmark) {
+        *qmark = '\0';     // Split path and query
+        query = qmark + 1;
     }
 
-    printf("Method=%s\nPath=%s\nVersion=%s\n", method, path, version);
-    if (query) printf("Query=%s\n", query);
+    // Debug info
+    printf("Method=%s\n", method);
+    printf("Path=%s\n", path);
+    printf("Version=%s\n", version);
+    if (query) {
+        printf("Query=%s\n", query);
+    }
 
-    // 4. Parse Host header
-    char *host_hdr = strstr(reqbuf, "Host:");
-    if (host_hdr) {
-        host_hdr += 5; // skip "Host:"
-        while (*host_hdr == ' ' || *host_hdr == '\t') host_hdr++; // skip spaces/tabs
-
-        char host_val[256] = {0};
-        size_t i = 0;
-        // Copy until CRLF (end of line)
-        while (*host_hdr && *host_hdr != '\r' && *host_hdr != '\n' && i < sizeof(host_val)-1) {
-            host_val[i++] = *host_hdr++;
-        }
-        host_val[i] = '\0';
+    // --- Parse Host header ---
+    char *host_ptr = strstr(buf, "Host:");
+    if (host_ptr) {
+        char host_val[256];
+        sscanf(host_ptr, "Host: %255s", host_val);
         printf("Host=%s\n", host_val);
-    } else {
-        printf("Host header not found!\n");
     }
 
-    // 5. Reject unsupported HTTP methods (only GET & POST supported)
-    if (strcmp(method, "GET") != 0 && strcmp(method, "POST") != 0) {
-        const char *mna =
-            "HTTP/1.1 405 Method Not Allowed\r\n"
-            "Content-Type: text/plain\r\n"
-            "Connection: close\r\n\r\n"
-            "405 - Method Not Allowed";
-        send_all(client_fd, mna, strlen(mna));
-        return;
-    }
+    // --- Handle GET Request ---
+    if (strcmp(method, "GET") == 0) {
+        char body[1024];
 
-    // ==============================
-    // Handle POST requests
-    // ==============================
-    if (strcmp(method, "POST") == 0) {
-        int content_length = 0;
-
-        // Scan headers for "Content-Length:"
-        const char *scan = reqbuf;
-        while (scan && *scan) {
-            const char *line_end = strstr(scan, "\r\n");
-            size_t line_len = line_end ? (size_t)(line_end - scan) : strlen(scan);
-
-            if (line_len == 0) break; // reached CRLFCRLF (end of headers)
-
-            if (strncasecmp(scan, "Content-Length:", 15) == 0) {
-                sscanf(scan + 15, " %d", &content_length);
+        // Example endpoints
+        if (strcmp(path, "/hello") == 0) {
+            snprintf(body, sizeof(body), "Hello Student!");
+        } else if (strcmp(path, "/time") == 0) {
+            time_t now = time(NULL);
+            snprintf(body, sizeof(body), "Current Time: %s", ctime(&now));
+        } else {
+            // Unknown path
+            snprintf(body, sizeof(body), "Unknown Path!");
+            if (query) {
+                // Append query to response
+                strncat(body, "\nQuery=", sizeof(body) - strlen(body) - 1);
+                strncat(body, query, sizeof(body) - strlen(body) - 1);
             }
-
-            if (!line_end) break;
-            scan = line_end + 2;
-            if (line_end[2] == '\r' && line_end[3] == '\n') break;
         }
 
-        if (content_length < 0) content_length = 0;
-        if (content_length > POST_MAX) {
-            printf("Warning: Content-Length=%d exceeds limit %d; truncating.\n",
-                   content_length, POST_MAX);
-            content_length = POST_MAX;
-        }
+        // Build HTTP response
+        char response[2048];
+        snprintf(response, sizeof(response),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Length: %lu\r\n"
+                 "Content-Type: text/plain\r\n"
+                 "Connection: close\r\n"
+                 "\r\n"
+                 "%s",
+                 strlen(body), body);
 
-        // Find start of body inside reqbuf (may already have part of body)
-        char *body_start = strstr(reqbuf, "\r\n\r\n");
+        send(client_fd, response, strlen(response), 0);
+    }
+
+    // --- Handle POST Request ---
+    else if (strcmp(method, "POST") == 0) {
+        char *body_start = strstr(buf, "\r\n\r\n");  // Find body
+        char body_data[BUF_SIZE] = {0};
         int already_have = 0;
-        char body_data[POST_MAX + 1];
-        memset(body_data, 0, sizeof(body_data));
 
         if (body_start) {
-            body_start += 4; // skip "\r\n\r\n"
-            size_t avail = strlen(body_start);
-            if ((int)avail > content_length) avail = (size_t)content_length;
-            memcpy(body_data, body_start, avail);
-            already_have = (int)avail;
+            body_start += 4;  // Skip CRLFCRLF
+            already_have = strlen(body_start);
+            strncpy(body_data, body_start, already_have);
         }
 
-        // If we didn’t receive whole body, continue reading from socket
+        // If full body not yet read, receive remaining
         int remaining = content_length - already_have;
-        while (remaining > 0) {
-            ssize_t n = recv(client_fd, body_data + already_have, (size_t)remaining, 0);
-            if (n <= 0) break;
-            already_have += (int)n;
-            remaining -= (int)n;
+        int n;
+        while (remaining > 0 && (n = recv(client_fd, body_data + already_have, remaining, 0)) > 0) {
+            already_have += n;
+            remaining -= n;
         }
         body_data[already_have] = '\0';
 
+        // Print POST body for debugging
         printf("===== POST BODY =====\n%s\n=====================\n", body_data);
 
-        // Construct response headers (separate from body to avoid truncation issues)
+        // Build header response (without body yet)
         char header[256];
-        size_t body_msg_len = 20 + strlen(body_data); // "Received POST data:\n" = 20 chars
         int header_len = snprintf(header, sizeof(header),
             "HTTP/1.1 200 OK\r\n"
-            "Content-Length: %zu\r\n"
+            "Content-Length: %lu\r\n"
             "Content-Type: text/plain\r\n"
             "Connection: close\r\n"
             "\r\n",
-            body_msg_len);
+            strlen(body_data) + 20); // +20 for extra text
 
-        send_all(client_fd, header, (size_t)header_len);
+        send(client_fd, header, header_len, 0);
 
-        // Construct and send response body
-        char body_msg[POST_MAX + 64];
-        int payload_len = snprintf(body_msg, sizeof(body_msg),
-                                   "Received POST data:\n%s", body_data);
-        if (payload_len < 0) payload_len = 0;
-        send_all(client_fd, body_msg, (size_t)payload_len);
-        return; // finished POST
+        // Send body separately
+        char body_msg[4096];
+        int body_len = snprintf(body_msg, sizeof(body_msg),
+                                "Received POST data:\n%s", body_data);
+        send(client_fd, body_msg, body_len, 0);
     }
 
-    // ==============================
-    // Handle GET requests
-    // ==============================
-    char body[1024];
-    if (strcmp(path, "/hello") == 0) {
-        snprintf(body, sizeof(body), "Hello Student!");
-    } else if (strcmp(path, "/time") == 0) {
-        time_t now = time(NULL);
-        snprintf(body, sizeof(body), "Current Time: %s", ctime(&now));
-    } else {
-        snprintf(body, sizeof(body), "Unknown Path!");
-        if (query) {
-            strncat(body, "\nQuery=", sizeof(body) - strlen(body) - 1);
-            strncat(body, query, sizeof(body) - strlen(body) - 1);
-        }
+    // --- Handle Unsupported Methods ---
+    else {
+        char *resp = "HTTP/1.1 405 Method Not Allowed\r\n\r\n";
+        send(client_fd, resp, strlen(resp), 0);
     }
 
-    // Build and send HTTP response for GET
-    char resp[2048];
-    int resp_len = snprintf(resp, sizeof(resp),
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Length: %zu\r\n"
-        "Content-Type: text/plain\r\n"
-        "Connection: close\r\n"
-        "\r\n"
-        "%s",
-        strlen(body), body);
-
-    if (resp_len < 0) resp_len = 0;
-    send_all(client_fd, resp, (size_t)resp_len);
+    // Close connection
+    close(client_fd);
 }
 
-// =============================================================
-// thread_func()
-// Thread wrapper that runs handle_client() for each client.
-// Frees allocated memory and closes socket when done.
-// =============================================================
-static void *thread_func(void *arg) {
-    int client_fd = *(int*)arg;
-    free(arg); // free memory allocated in main()
-    handle_client(client_fd);
-    close(client_fd); // close socket after handling
-    return NULL;
-}
-
-// =============================================================
-// main()
-// Entry point: Creates socket, binds, listens, and accepts clients.
-// Each client connection is handled in a new detached thread.
-// =============================================================
-int main(void) {
-    int server_fd;
+/*
+ * main:
+ * - Creates a TCP socket
+ * - Binds to localhost:8080
+ * - Listens for incoming clients
+ * - Accepts and handles clients one by one
+ */
+int main() {
+    int server_fd, client_fd;
     struct sockaddr_in addr;
     socklen_t addrlen = sizeof(addr);
 
-    // 1. Create socket
+    // Create socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) { perror("socket"); exit(EXIT_FAILURE); }
+    if (server_fd < 0) { perror("socket"); exit(1); }
 
-    // 2. Allow reuse of address:port (avoid "Address already in use" on restart)
+    // Allow reusing port immediately after restart
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // 3. Bind to IP:PORT
-    memset(&addr, 0, sizeof(addr));
+    // Setup server address
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY; // accept connections on any interface
-    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = INADDR_ANY;  // Bind to all interfaces
+    addr.sin_port = htons(PORT);        // Convert port to network byte order
 
+    // Bind socket to address and port
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("bind");
-        close(server_fd);
-        exit(EXIT_FAILURE);
+        exit(1);
     }
 
-    // 4. Start listening (16 pending connections max in queue)
-    if (listen(server_fd, 16) < 0) {
+    // Listen for incoming connections (queue size = 10)
+    if (listen(server_fd, 10) < 0) {
         perror("listen");
-        close(server_fd);
-        exit(EXIT_FAILURE);
+        exit(1);
     }
 
     printf("Server running on http://localhost:%d\n", PORT);
 
-    // 5. Accept loop — each client handled in a new thread
+    // Accept and handle clients in loop
     while (1) {
-        int client_fd = accept(server_fd, (struct sockaddr*)&addr, &addrlen);
+        client_fd = accept(server_fd, (struct sockaddr*)&addr, &addrlen);
         if (client_fd < 0) { perror("accept"); continue; }
-
-        // Allocate client_fd dynamically (so thread has its own copy)
-        int *pclient = (int*)malloc(sizeof(int));
-        if (!pclient) { close(client_fd); continue; }
-        *pclient = client_fd;
-
-        pthread_t tid;
-        // Create thread to handle client
-        if (pthread_create(&tid, NULL, thread_func, pclient) == 0) {
-            pthread_detach(tid); // auto-clean resources when thread ends
-        } else {
-            perror("pthread_create");
-            close(client_fd);
-            free(pclient);
-        }
+        handle_client(client_fd);
     }
 
+    // Close server (unreachable in this infinite loop)
     close(server_fd);
     return 0;
 }
