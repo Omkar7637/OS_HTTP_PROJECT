@@ -1,0 +1,13 @@
+../Core/Src/main.c:76:6:ACC_CS_LOW	1
+../Core/Src/main.c:77:6:ACC_CS_HIGH	1
+../Core/Src/main.c:80:9:SPI_Read	1
+../Core/Src/main.c:90:6:SPI_Write	1
+../Core/Src/main.c:99:6:Accelerometer_Init	1
+../Core/Src/main.c:103:6:Accelerometer_ReadAxes	1
+../Core/Src/main.c:109:6:Accelerometer_ReadAxes_g	1
+../Core/Src/main.c:127:5:main	5
+../Core/Src/main.c:209:6:SystemClock_Config	3
+../Core/Src/main.c:256:13:MX_SPI1_Init	2
+../Core/Src/main.c:294:13:MX_USART2_UART_Init	2
+../Core/Src/main.c:327:13:MX_GPIO_Init	1
+../Core/Src/main.c:361:6:Error_Handler	1

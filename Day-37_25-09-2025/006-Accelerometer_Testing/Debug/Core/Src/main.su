@@ -1,0 +1,13 @@
+../Core/Src/main.c:71:6:ACC_CS_LOW	8	static
+../Core/Src/main.c:72:6:ACC_CS_HIGH	8	static
+../Core/Src/main.c:75:9:SPI_Read	32	static
+../Core/Src/main.c:85:6:SPI_Write	24	static
+../Core/Src/main.c:94:6:Accelerometer_Init	8	static
+../Core/Src/main.c:98:6:Accelerometer_ReadAxes	24	static
+../Core/Src/main.c:104:6:Accelerometer_ReadAxes_g	32	static
+../Core/Src/main.c:122:5:main	128	static
+../Core/Src/main.c:199:6:SystemClock_Config	88	static
+../Core/Src/main.c:246:13:MX_SPI1_Init	8	static
+../Core/Src/main.c:284:13:MX_USART2_UART_Init	8	static
+../Core/Src/main.c:317:13:MX_GPIO_Init	40	static
+../Core/Src/main.c:351:6:Error_Handler	4	static,ignoring_inline_asm
